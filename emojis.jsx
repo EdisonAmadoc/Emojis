@@ -677,4 +677,8 @@ const App = () => {
     );
 };
 
+git add .
+git commit -m
+git push origin main
+
 export default App;
