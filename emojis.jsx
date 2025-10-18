@@ -1,117 +1,87 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Search, Heart, Info, Grid, List, Share2, Loader, X, ExternalLink } from 'lucide-react';
+import { Search, Heart, Info, Grid, List, Share2, Loader, X, ExternalLink, Volume2 } from 'lucide-react';
 
-// Constantes para la API y la estructura de navegación
+// Constante para la API de Emojis
 const API_URL = 'https://unpkg.com/emojibase-data@latest/en/data.json';
-const VOICE_NAME = "Aoede"; // Voz para la síntesis de voz
 
-// --- Funciones de Utilidad para API ---
+// --- Funciones de Utilidad (TTS y Notificaciones) ---
 
 /**
- * Función genérica para realizar llamadas a la API de TTS (Text-to-Speech).
+ * Función moderna para copiar al portapapeles.
  */
-async function generateSpeech(text, voiceName, setAudioUrl) {
-    if (!text) return;
-    setAudioUrl(null); // Limpiar URL anterior
-    const apiKey = "";
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
-
-    const payload = {
-        contents: [{
-            parts: [{ text: `Say in a clear voice: ${text}` }]
-        }],
-        generationConfig: {
-            responseModalities: ["AUDIO"],
-            speechConfig: {
-                voiceConfig: {
-                    prebuiltVoiceConfig: { voiceName: voiceName }
-                }
-            }
-        },
-        model: "gemini-2.5-flash-preview-tts"
-    };
-
-    const base64ToArrayBuffer = (base64) => {
-        const binaryString = window.atob(base64);
-        const len = binaryString.length;
-        const bytes = new Uint8Array(len);
-        for (let i = 0; i < len; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-        }
-        return bytes.buffer;
-    };
-
-    const pcmToWav = (pcm16, sampleRate = 16000) => {
-        const numChannels = 1;
-        const bitsPerSample = 16;
-        const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
-        const blockAlign = numChannels * (bitsPerSample / 8);
-        const buffer = new ArrayBuffer(44 + pcm16.byteLength);
-        const view = new DataView(buffer);
-        let offset = 0;
-
-        // RIFF chunk
-        view.setUint32(offset, 0x52494646, false); offset += 4; // "RIFF"
-        view.setUint32(offset, 36 + pcm16.byteLength, true); offset += 4; // ChunkSize
-        view.setUint32(offset, 0x57415645, false); offset += 4; // "WAVE"
-
-        // FMT sub-chunk
-        view.setUint32(offset, 0x666d7420, false); offset += 4; // "fmt "
-        view.setUint32(offset, 16, true); offset += 4; // Subchunk1Size (16 for PCM)
-        view.setUint16(offset, 1, true); offset += 2; // AudioFormat (1 for PCM)
-        view.setUint16(offset, numChannels, true); offset += 2; // NumChannels
-        view.setUint32(offset, sampleRate, true); offset += 4; // SampleRate
-        view.setUint32(offset, byteRate, true); offset += 4; // ByteRate
-        view.setUint16(offset, blockAlign, true); offset += 2; // BlockAlign
-        view.setUint16(offset, bitsPerSample, true); offset += 2; // BitsPerSample
-
-        // DATA sub-chunk
-        view.setUint32(offset, 0x64617461, false); offset += 4; // "data"
-        view.setUint32(offset, pcm16.byteLength, true); offset += 4; // Subchunk2Size
-        
-        // Write the PCM data
-        for (let i = 0; i < pcm16.length; i++) {
-            view.setInt16(offset, pcm16[i], true);
-            offset += 2;
-        }
-
-        return new Blob([view], { type: 'audio/wav' });
-    };
-
+const copyToClipboard = async (text, setNotification) => {
     try {
-        const response = await fetch(apiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-
-        const result = await response.json();
-        const part = result?.candidates?.[0]?.content?.parts?.[0];
-        const audioData = part?.inlineData?.data;
-        const mimeType = part?.inlineData?.mimeType;
-
-        if (audioData && mimeType && mimeType.startsWith("audio/")) {
-            // Sample rate from mimeType: audio/L16;rate=16000;channels=1
-            const rateMatch = mimeType.match(/rate=(\d+)/);
-            const sampleRate = rateMatch ? parseInt(rateMatch[1], 10) : 16000;
-            const pcmData = base64ToArrayBuffer(audioData);
-            const pcm16 = new Int16Array(pcmData);
-            const wavBlob = pcmToWav(pcm16, sampleRate);
-            const audioUrl = URL.createObjectURL(wavBlob);
-            setAudioUrl(audioUrl);
+        if (navigator.clipboard) {
+            await navigator.clipboard.writeText(text);
+            setNotification({ message: 'Emoji copiado: ' + text, type: 'success' });
         } else {
-            console.error("Error generating speech or missing audio data:", result);
-            setAudioUrl("error");
+            // Fallback para entornos no seguros/antiguos (aunque obsoleto)
+            const tempInput = document.createElement('textarea');
+            tempInput.value = text;
+            document.body.appendChild(tempInput);
+            tempInput.select();
+            document.execCommand('copy');
+            document.body.removeChild(tempInput);
+            setNotification({ message: 'Emoji copiado (Fallback): ' + text, type: 'warning' });
         }
-
-    } catch (error) {
-        console.error("API call failed:", error);
-        setAudioUrl("error");
+    } catch (err) {
+        console.error("Error al copiar:", err);
+        setNotification({ message: 'Error al copiar al portapapeles.', type: 'error' });
     }
-}
-// --- Fin de Funciones de Utilidad ---
+};
 
-// Componente para el Splash Screen (0.15)
+/**
+ * Función nativa del navegador para Text-to-Speech.
+ */
+const speakText = (text) => {
+    if ('speechSynthesis' in window) {
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'en-US'; // Se mantiene en inglés, ya que los nombres son en-US
+        window.speechSynthesis.speak(utterance);
+    } else {
+        alert("El navegador no soporta la Síntesis de Voz.");
+    }
+};
+
+// Componente de Notificación Flotante (Toast)
+const ToastNotification = ({ notification, setNotification }) => {
+    useEffect(() => {
+        if (notification) {
+            const timer = setTimeout(() => {
+                setNotification(null);
+            }, 3000);
+            return () => clearTimeout(timer);
+        }
+    }, [notification, setNotification]);
+
+    if (!notification) return null;
+
+    const baseStyle = "fixed bottom-5 right-5 p-4 rounded-xl shadow-2xl transition-opacity duration-300 z-[60] flex items-center";
+    let style = "";
+    
+    switch (notification.type) {
+        case 'success':
+            style = "bg-green-500 text-white";
+            break;
+        case 'warning':
+            style = "bg-yellow-500 text-gray-800";
+            break;
+        case 'error':
+            style = "bg-red-500 text-white";
+            break;
+        default:
+            style = "bg-indigo-500 text-white";
+    }
+
+    return (
+        <div className={`${baseStyle} ${style}`}>
+            <Info className="w-5 h-5 mr-2" />
+            <span>{notification.message}</span>
+        </div>
+    );
+};
+
+// Componente para el Splash Screen
 const SplashScreen = () => (
     <div className="fixed inset-0 bg-indigo-700 flex flex-col items-center justify-center z-50 transition-opacity duration-1000">
         <Loader className="animate-spin text-white h-16 w-16 mb-4" />
@@ -121,7 +91,7 @@ const SplashScreen = () => (
 );
 
 // Componente de Tarjeta de Emoji
-const EmojiCard = ({ emoji, isFavorite, onSelect, onToggleFavorite }) => (
+const EmojiCard = React.memo(({ emoji, isFavorite, onSelect, onToggleFavorite }) => (
     <div
         className="bg-white p-4 flex flex-col items-center justify-between rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 cursor-pointer border-2 border-transparent hover:border-indigo-400"
     >
@@ -153,40 +123,24 @@ const EmojiCard = ({ emoji, isFavorite, onSelect, onToggleFavorite }) => (
             </button>
         </div>
     </div>
-);
+));
 
 
 // --- Vistas Principales ---
 
-// Vista de Detalle (0.1)
-const DetailView = ({ emoji, onClose, onToggleFavorite, isFavorite }) => {
-    const [audioUrl, setAudioUrl] = useState(null);
+// Vista de Detalle
+const DetailView = ({ emoji, onClose, onToggleFavorite, isFavorite, setNotification }) => {
 
-    // Función original 1: Copiar emoji al portapapeles
-    const copyToClipboard = () => {
-        const tempInput = document.createElement('textarea');
-        tempInput.value = emoji.emoji;
-        document.body.appendChild(tempInput);
-        tempInput.select();
-        document.execCommand('copy');
-        document.body.removeChild(tempInput);
-        // NOTA: Reemplazo de alert() con un mensaje de notificación simple.
-        alert('Emoji copiado: ' + emoji.emoji);
+    // Función: Copiar emoji al portapapeles (usa la función corregida)
+    const handleCopy = () => {
+        copyToClipboard(emoji.emoji, setNotification);
     };
 
-    // Función original 2: TTS del nombre (Síntesis de Voz)
+    // Función: TTS del nombre (usa la función corregida)
     const handleSpeak = () => {
-        if (audioUrl) {
-            new Audio(audioUrl).play();
-        } else if (audioUrl !== "error") {
-            generateSpeech(emoji.name, VOICE_NAME, setAudioUrl);
-        }
+        speakText(emoji.name);
+        setNotification({ message: `Leyendo: "${emoji.name}"`, type: 'info' });
     };
-
-    useEffect(() => {
-        // Al montar o cambiar el emoji, pre-generar el audio
-        generateSpeech(emoji.name, VOICE_NAME, setAudioUrl);
-    }, [emoji.name]);
 
     return (
         <div className="p-6 md:p-10 bg-gray-50 min-h-screen">
@@ -231,24 +185,20 @@ const DetailView = ({ emoji, onClose, onToggleFavorite, isFavorite }) => {
                 </div>
 
                 <div className="mt-10 pt-6 border-t">
-                    <h3 className="text-2xl font-semibold mb-4 text-indigo-600">Funciones Adicionales (Originales)</h3>
+                    <h3 className="text-2xl font-semibold mb-4 text-indigo-600">Funciones Interactivas</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                         <button
-                            onClick={copyToClipboard}
+                            onClick={handleCopy}
                             className="flex items-center justify-center p-4 bg-green-500 text-white rounded-xl shadow-md hover:bg-green-600 transition duration-300 transform hover:scale-[1.02]"
                         >
-                            <Share2 className="w-5 h-5 mr-2" /> Copiar Emoji (Función 1)
+                            <Share2 className="w-5 h-5 mr-2" /> Copiar Emoji
                         </button>
                         <button
                             onClick={handleSpeak}
-                            disabled={!audioUrl || audioUrl === "error"}
-                            className={`flex items-center justify-center p-4 rounded-xl shadow-md transition duration-300 transform hover:scale-[1.02] ${
-                                audioUrl === "error"
-                                    ? 'bg-red-400 text-white cursor-not-allowed'
-                                    : 'bg-indigo-500 text-white hover:bg-indigo-600'
-                            }`}
+                            className="flex items-center justify-center p-4 rounded-xl shadow-md transition duration-300 transform hover:scale-[1.02] bg-indigo-500 text-white hover:bg-indigo-600"
+                            title="Leer el nombre del emoji"
                         >
-                            {audioUrl === "error" ? 'Error TTS' : 'Leer Nombre (Función 2)'}
+                            <Volume2 className="w-5 h-5 mr-2" /> Leer Nombre (TTS)
                         </button>
                         <button
                             onClick={() => onToggleFavorite(emoji.hexcode)}
@@ -266,7 +216,7 @@ const DetailView = ({ emoji, onClose, onToggleFavorite, isFavorite }) => {
     );
 };
 
-// Vista de Exploración (Lista, Buscador, Filtro - 0.1, 0.1, 0.1)
+// Vista de Exploración (Lista, Buscador, Filtro)
 const ExploreView = ({ filteredEmojis, searchTerm, onSearch, categoryFilter, onFilter, onSelect, onToggleFavorite, favorites }) => {
     const categories = useMemo(() => {
         const cats = new Set(filteredEmojis.map(e => e.category).filter(Boolean));
@@ -329,7 +279,7 @@ const ExploreView = ({ filteredEmojis, searchTerm, onSearch, categoryFilter, onF
     );
 };
 
-// Vista de Favoritos (0.1)
+// Vista de Favoritos
 const FavoritesView = ({ emojis, onSelect, onToggleFavorite, favorites }) => {
     const favoriteEmojis = useMemo(() => {
         const hexMap = new Map(emojis.map(e => [e.hexcode, e]));
@@ -367,7 +317,7 @@ const FavoritesView = ({ emojis, onSelect, onToggleFavorite, favorites }) => {
     );
 };
 
-// Vista de Categorías (Sirve como 'Filtro' avanzado - 0.1)
+// Vista de Categorías
 const CategoriesView = ({ emojis, onCategorySelect, setView }) => {
     const categories = useMemo(() => {
         const counts = emojis.reduce((acc, emoji) => {
@@ -409,7 +359,7 @@ const CategoriesView = ({ emojis, onCategorySelect, setView }) => {
 };
 
 
-// Vista Informativa (0.1)
+// Vista Informativa
 const AboutView = () => (
     <div className="p-4 md:p-8 min-h-screen bg-gray-50">
         <div className="max-w-3xl mx-auto bg-white p-8 rounded-3xl shadow-2xl">
@@ -425,16 +375,11 @@ const AboutView = () => (
                 Esto significa que son tratados como letras, números o símbolos, permitiendo que se muestren consistentemente en diferentes plataformas y sistemas operativos.
             </p>
 
-            <h3 className="text-xl font-semibold text-indigo-600 mt-4 mb-2">Sobre las letras del abecedario (Indicadores Regionales)</h3>
-            <p className="text-gray-700 mb-4">
-                Dentro del universo Unicode, las letras individuales que a veces se ven al inicio de la lista (A, B, C, etc.) son los "Símbolos de Indicador Regional". Estos caracteres por sí solos no son banderas, pero cuando se combinan en pares (ej: `U` + `S`), forman la bandera de un país (`🇺🇸`).
-            </p>
-
             <h2 className="text-2xl font-semibold text-gray-800 mt-6 mb-3">Información de la Aplicación</h2>
             <ul className="list-disc list-inside space-y-2 text-gray-700 pl-4">
                 <li>**Limitación (Demo):** La aplicación está limitada a mostrar los **primeros 100 emojis** para garantizar una carga rápida y estable en este entorno.</li>
                 <li>**Características:** Incluye un sistema completo de búsqueda, filtrado por categorías, gestión de favoritos (guardados localmente) y vistas de detalle con funciones interactivas.</li>
-                <li>**Funciones Originales:** En la vista de detalle, puedes **Copiar el emoji** al portapapeles y usar **Text-to-Speech (TTS)** para escuchar el nombre del emoji.</li>
+                <li>**Funciones Corregidas:** Ahora usa la API nativa de **Text-to-Speech (TTS)** para leer los nombres de los emojis y la API moderna de **Portapapeles** para copiar.</li>
             </ul>
         </div>
     </div>
@@ -445,14 +390,15 @@ const AboutView = () => (
 const App = () => {
     const [emojis, setEmojis] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [activeView, setActiveView] = useState('explorar'); // 'explorar', 'favoritos', 'categorias', 'acerca'
+    const [activeView, setActiveView] = useState('explorar'); // 'explorar', 'favoritos', 'categorias', 'acerca', 'detalle'
     const [selectedEmoji, setSelectedEmoji] = useState(null); // Para la vista 'detalle'
 
     const [searchTerm, setSearchTerm] = useState('');
     const [categoryFilter, setCategoryFilter] = useState('Todas');
     const [favorites, setFavorites] = useState([]); // Almacena los `hexcode`
+    const [notification, setNotification] = useState(null); // Para el Toast
 
-    // Cargar datos y favoritos al inicio (0.15 splash + API)
+    // Cargar datos y favoritos al inicio
     useEffect(() => {
         // 1. Cargar la API de Emojis
         const fetchEmojis = async () => {
@@ -462,14 +408,11 @@ const App = () => {
                 
                 // Aplicar el filtro de emoji existente y LIMITAR A LOS PRIMEROS 100
                 const simpleEmojis = data.filter(e => e.emoji).slice(0, 100); 
-                
-                // Mensaje de depuración
-                console.log(`[EmojiDex] Loaded ${simpleEmojis.length} emojis (Limited to 100).`);
-
                 setEmojis(simpleEmojis);
 
             } catch (error) {
                 console.error("Error fetching emoji data:", error);
+                setNotification({ message: 'Error al cargar los emojis. Intenta recargar.', type: 'error' });
             } finally {
                 setTimeout(() => setLoading(false), 1500); // Muestra el splash por 1.5s
             }
@@ -482,7 +425,7 @@ const App = () => {
         fetchEmojis();
     }, []);
 
-    // Manejar Objeto Compartido / Deep Linking (0.1)
+    // Manejar Objeto Compartido / Deep Linking
     useEffect(() => {
         const handleHashChange = () => {
             const hash = window.location.hash.substring(1);
@@ -494,22 +437,27 @@ const App = () => {
                     return;
                 }
             }
-            // Si no hay hash o el emoji no existe, volver a la vista principal
+            // Si no hay hash o el emoji no existe, volver a la vista principal si estamos en detalle
             if (activeView === 'detalle' && !hash) {
                 setActiveView('explorar');
             }
         };
 
         window.addEventListener('hashchange', handleHashChange);
-        handleHashChange(); // Ejecutar al cargar
+        // Esperar a que los emojis carguen antes de ejecutar handleHashChange la primera vez
+        if (!loading && emojis.length > 0) {
+            handleHashChange(); 
+        }
 
         return () => window.removeEventListener('hashchange', handleHashChange);
-    }, [emojis, activeView]);
+    }, [emojis, activeView, loading]);
 
     // Función para manejar la navegación
     const handleNavigation = (view, emoji = null) => {
-        // Limpiar el hash de la URL al cambiar de vista
-        window.location.hash = '';
+        // Limpiar el hash de la URL al cambiar de vista a no-detalle
+        if (view !== 'detalle') {
+            window.location.hash = '';
+        }
 
         setSelectedEmoji(emoji);
         setActiveView(view);
@@ -525,16 +473,20 @@ const App = () => {
     // Función para agregar/quitar de favoritos
     const handleToggleFavorite = (hexcode) => {
         let newFavorites;
+        let message;
         if (favorites.includes(hexcode)) {
             newFavorites = favorites.filter(h => h !== hexcode);
+            message = "Emoji eliminado de favoritos.";
         } else {
             newFavorites = [...favorites, hexcode];
+            message = "Emoji añadido a favoritos!";
         }
         setFavorites(newFavorites);
         localStorage.setItem('emojiFavorites', JSON.stringify(newFavorites));
+        setNotification({ message: message, type: 'info' });
     };
 
-    // Lógica de Filtrado y Búsqueda (0.1 filtro + 0.1 buscador)
+    // Lógica de Filtrado y Búsqueda
     const filteredEmojis = useMemo(() => {
         let list = emojis;
 
@@ -548,7 +500,6 @@ const App = () => {
             const lowerCaseSearch = searchTerm.toLowerCase();
             list = list.filter(e =>
                 e.name.toLowerCase().includes(lowerCaseSearch) ||
-                // Seguridad: Asegurar que e.tags existe antes de usar .some()
                 (e.tags && e.tags.some(tag => tag.toLowerCase().includes(lowerCaseSearch))) 
             );
         }
@@ -595,7 +546,6 @@ const App = () => {
                 return <AboutView />;
 
             case 'detalle':
-                // Si selectedEmoji está vacío (ej. alguien limpió el hash), vuelve a explorar
                 if (!selectedEmoji) {
                     setActiveView('explorar');
                     return null;
@@ -606,6 +556,7 @@ const App = () => {
                         onClose={() => handleNavigation('explorar')}
                         onToggleFavorite={handleToggleFavorite}
                         isFavorite={favorites.includes(selectedEmoji.hexcode)}
+                        setNotification={setNotification}
                     />
                 );
 
@@ -614,7 +565,7 @@ const App = () => {
         }
     };
 
-    // Componente del Menú de Navegación (0.1 menú + 0.1 * 5 pestañas)
+    // Componente del Menú de Navegación
     const NavItem = ({ view, icon: Icon, label }) => {
         const isCurrentView = view === activeView;
 
@@ -638,24 +589,24 @@ const App = () => {
         <div className="min-h-screen bg-gray-100 font-sans antialiased">
             {loading && <SplashScreen />}
 
-            {/* Menú de Navegación (0.1) */}
+            {/* Menú de Navegación */}
             <header className="sticky top-0 z-40 bg-indigo-700 shadow-lg">
                 <nav className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
                     <div className="flex justify-between items-center">
                         <div className="flex items-center space-x-3">
-                            <span className="text-3xl" role="img" aria-label="EmojiDex Logo">🌟</span>
+                            <span className="text-3xl" role="img" aria-label="EmojiDex Logo"></span>
                             <h1 className="text-2xl font-extrabold text-white hidden md:block">
-                                EmojiDex (Demo: 100 Emojis)
+                                EmojiDex
                             </h1>
                         </div>
 
-                        {/* 5 Pestañas (0.1) */}
+                        {/* Pestañas */}
                         <div className="flex space-x-1 sm:space-x-3">
                             <NavItem view="explorar" icon={List} label="Explorar" />
                             <NavItem view="categorias" icon={Grid} label="Categorías" />
                             <NavItem view="favoritos" icon={Heart} label="Favoritos" />
                             <NavItem view="acerca" icon={Info} label="Acerca de" />
-                            {/* Pestaña de Detalle - Se activa dinámicamente y se oculta si no hay selección */}
+                            {/* Pestaña de Detalle - Se activa dinámicamente */}
                             {selectedEmoji && activeView === 'detalle' && (
                                 <NavItem view="detalle" icon={ExternalLink} label="Detalle" />
                             )}
@@ -671,14 +622,11 @@ const App = () => {
                 {renderContent()}
             </main>
 
-            {/* Simulación de alerta/modal - Reemplazo de alert() */}
+            {/* Notificación Toast (Corregida) */}
+            <ToastNotification notification={notification} setNotification={setNotification} />
 
         </div>
     );
 };
-
-git add .
-git commit -m
-git push origin main
 
 export default App;
